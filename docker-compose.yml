@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: olist
+      POSTGRES_PASSWORD: olist
+      POSTGRES_DB: olist
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d
+
+  olist-parser:
+    build: .
+    volumes:
+      - ./data:/app/data
+      - kagglehub-cache:/root/.cache/kagglehub
+
+  olist-loader:
+    build: .
+    command: python load_olist_orders.py
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgresql://olist:olist@postgres:5432/olist
+    volumes:
+      - ./data:/app/data
+
+volumes:
+  kagglehub-cache:
+  postgres-data:
