@@ -10,6 +10,11 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U olist -d olist"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   olist-parser:
     build: .
@@ -17,15 +22,25 @@ services:
       - ./data:/app/data
       - kagglehub-cache:/root/.cache/kagglehub
 
-  olist-loader:
+  olist-raw-loader:
     build: .
-    command: python load_olist_orders.py
+    command: python load_olist_raw.py
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://olist:olist@postgres:5432/olist
     volumes:
       - ./data:/app/data
+
+  olist-orders-loader:
+    build: .
+    command: python load_olist_orders.py
+    depends_on:
+      olist-raw-loader:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://olist:olist@postgres:5432/olist
 
 volumes:
   kagglehub-cache:
