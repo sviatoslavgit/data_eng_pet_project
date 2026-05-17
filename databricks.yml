@@ -1,0 +1,77 @@
+bundle:
+  name: data_eng_pet_project
+  databricks_cli_version: ">= 0.299.0"
+
+sync:
+  include:
+    - build_olist_warehouse.py
+    - requirements-databricks.txt
+    - sql/010_warehouse.sql
+  exclude:
+    - .venv/**
+    - data/**
+    - __pycache__/**
+
+variables:
+  workspace_host:
+    description: Databricks workspace URL, for example https://adb-123.azuredatabricks.net
+  node_type_id:
+    description: Databricks node type for the job cluster, for example Standard_DS3_v2 or i3.xlarge.
+  spark_version:
+    description: Databricks Runtime version for the job cluster.
+    default: 15.4.x-scala2.12
+  secret_scope:
+    description: Databricks secret scope containing the PostgreSQL connection URL.
+    default: data_eng_pet_project
+  database_url_secret_key:
+    description: Secret key containing the PostgreSQL DATABASE_URL.
+    default: postgres_database_url
+
+resources:
+  jobs:
+    olist_warehouse_incremental:
+      name: "[${bundle.target}] Olist warehouse incremental"
+      max_concurrent_runs: 1
+      parameters:
+        - name: batch_size
+          default: "5000"
+        - name: max_batches
+          default: "1"
+        - name: full_refresh
+          default: "false"
+      job_clusters:
+        - job_cluster_key: warehouse_job_cluster
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: 0
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: local[*, 4]
+            custom_tags:
+              ResourceClass: SingleNode
+            spark_env_vars:
+              DATABASE_URL: "{{secrets/${var.secret_scope}/${var.database_url_secret_key}}}"
+      tasks:
+        - task_key: build_warehouse_batch
+          job_cluster_key: warehouse_job_cluster
+          spark_python_task:
+            python_file: ./build_olist_warehouse.py
+            parameters:
+              - --batch-size
+              - "{{ job.parameters.batch_size }}"
+              - --max-batches
+              - "{{ job.parameters.max_batches }}"
+              - --full-refresh
+              - "{{ job.parameters.full_refresh }}"
+          libraries:
+            - requirements: /Workspace/${workspace.file_path}/requirements-databricks.txt
+          run_if: ALL_SUCCESS
+          timeout_seconds: 3600
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      host: ${var.workspace_host}

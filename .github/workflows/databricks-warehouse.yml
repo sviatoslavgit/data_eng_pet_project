@@ -1,0 +1,99 @@
+name: Databricks warehouse workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Databricks bundle target.
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+      run_job:
+        description: Deploy and run the Databricks job.
+        required: true
+        default: true
+        type: boolean
+      batch_size:
+        description: Orders per batch. Must be 5000 or less.
+        required: true
+        default: "5000"
+      max_batches:
+        description: Number of batches to process in this manual run.
+        required: true
+        default: "1"
+      full_refresh:
+        description: Reset staging/warehouse tables before running.
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: databricks-warehouse-${{ github.event.inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  validate-deploy-run:
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      BUNDLE_VAR_workspace_host: ${{ secrets.DATABRICKS_HOST }}
+      BUNDLE_VAR_node_type_id: ${{ vars.DATABRICKS_NODE_TYPE_ID }}
+      BUNDLE_VAR_spark_version: ${{ vars.DATABRICKS_SPARK_VERSION || '15.4.x-scala2.12' }}
+      BUNDLE_VAR_secret_scope: ${{ vars.DATABRICKS_SECRET_SCOPE || 'data_eng_pet_project' }}
+      BUNDLE_VAR_database_url_secret_key: ${{ vars.DATABRICKS_DATABASE_URL_SECRET_KEY || 'postgres_database_url' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate batch size
+        shell: bash
+        run: |
+          case "${{ github.event.inputs.batch_size }}" in
+            ''|*[!0-9]*)
+              echo "batch_size must be a positive integer"
+              exit 1
+              ;;
+          esac
+          case "${{ github.event.inputs.max_batches }}" in
+            ''|*[!0-9]*)
+              echo "max_batches must be a non-negative integer"
+              exit 1
+              ;;
+          esac
+          if [ "${{ github.event.inputs.batch_size }}" -gt 5000 ]; then
+            echo "batch_size must be <= 5000"
+            exit 1
+          fi
+          if [ "${{ github.event.inputs.batch_size }}" -lt 1 ]; then
+            echo "batch_size must be >= 1"
+            exit 1
+          fi
+          if [ -z "${BUNDLE_VAR_node_type_id}" ]; then
+            echo "Set repository variable DATABRICKS_NODE_TYPE_ID before deploying."
+            exit 1
+          fi
+
+      - name: Compile Python scripts
+        run: python -m py_compile build_olist_warehouse.py load_olist_raw.py load_olist_orders.py parse_olist_dataset.py
+
+      - name: Set up Databricks CLI
+        uses: databricks/setup-cli@main
+        with:
+          version: 0.299.2
+
+      - name: Validate bundle
+        run: databricks bundle validate -t "${{ github.event.inputs.target }}"
+
+      - name: Deploy bundle
+        run: databricks bundle deploy -t "${{ github.event.inputs.target }}" --auto-approve
+
+      - name: Run one manual incremental batch
+        if: ${{ github.event.inputs.run_job == 'true' }}
+        run: |
+          databricks bundle run -t "${{ github.event.inputs.target }}" \
+            --params "batch_size=${{ github.event.inputs.batch_size }},max_batches=${{ github.event.inputs.max_batches }},full_refresh=${{ github.event.inputs.full_refresh }}" \
+            olist_warehouse_incremental
