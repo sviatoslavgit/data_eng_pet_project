@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY parse_olist_dataset.py load_olist_raw.py load_olist_orders.py ./
+COPY parse_olist_dataset.py load_olist_raw.py load_olist_orders.py build_olist_warehouse.py ./
 COPY sql ./sql
 
 CMD ["python", "parse_olist_dataset.py"]
